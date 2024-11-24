@@ -132,7 +132,7 @@ baltimore_results <- broom::tidy(baltimore_model, conf.int = TRUE, exponentiate 
 ```
 
 Logistic Regression Across All Cities
-```{r}
+```{r, warning=FALSE}
 city_results <- homicide_data_clean |>
   group_by(city_state) |>
   nest() |>
@@ -171,5 +171,78 @@ city_results |>
 
 Most cities have an odds ratio (OR) less than 1, suggesting that homicides involving female victims are more likely to be solved compared to male victims. Cities with an OR greater than 1 indicate that homicides involving male victims are more likely to be solved compared to female victims. The two cities with an OR = 1 are Richmond, CA and Atlanta, GA. This OR indicates no difference in the likelihood of solving homicides based on victim sex.
 
+# Problem 3
+Import and clean data
+```{r}
+bwt_df <- read_csv("data/birthweight.csv") |> 
+  janitor::clean_names() |> 
+  mutate(
+    babysex = factor(babysex, labels = c("Male", "Female")),
+    malform = factor(malform, labels = c("Absent", "Present")),
+    mrace = factor(mrace),
+    frace = factor(frace)
+  ) |> 
+  drop_na()
+```
 
+Create a proposed model
+```{r}
+model_proposed <- lm(bwt ~ gaweeks + babysex + mheight + wtgain + smoken, data = bwt_df)
+```
+The proposed model aims to predict birth weight (bwt) using predictors such as gestational age (gaweeks), baby length (blength), and maternal weight gain (wtgain). Categorical variables like babysex and malform were appropriately converted to factors, and missing data was handled by excluding incomplete rows. The model includes main effects and interactions between predictors, and it was assessed using cross-validation to estimate prediction accuracy.
 
+Add predictions and residuals then plot 
+```{r}
+bwt_df <- bwt_df |> 
+  add_predictions(model_proposed, var = "pred_bwt") |> 
+  add_residuals(model_proposed, var = "resid_bwt")
+
+ggplot(bwt_df, aes(x = pred_bwt, y = resid_bwt)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "yellow") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+```
+
+The residuals are centered around zero, with an even spread above and below the zero line, indicating no bias. There’s no obvious pattern, suggesting that the model fits the data well without issues like heteroscedasticity. This implies the model's assumptions of linearity and constant variance are reasonable.
+
+Create comparison model
+```{r}
+model_main_effects <- lm(bwt ~ blength + gaweeks, data = bwt_df)
+model_interaction <- lm(bwt ~ bhead * blength * babysex, data = bwt_df)
+```
+
+Perform Monte Carlo cross-validation with 100 splits to compare the models based on RMSE.
+```{r}
+# Monte Carlo cross-validation
+cv_results <- crossv_mc(bwt_df, 100) |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble),
+    model_proposed = map(train, ~ lm(bwt ~ gaweeks + babysex + mheight + wtgain + smoken, data = .x)),
+    model_main_effects = map(train, ~ lm(bwt ~ blength + gaweeks, data = .x)),
+    model_interaction = map(train, ~ lm(bwt ~ bhead * blength * babysex, data = .x)),
+    rmse_proposed = map2_dbl(model_proposed, test, ~ rmse(model = .x, data = .y)),
+    rmse_main_effects = map2_dbl(model_main_effects, test, ~ rmse(model = .x, data = .y)),
+    rmse_interaction = map2_dbl(model_interaction, test, ~ rmse(model = .x, data = .y))
+  )
+```
+
+Reshape RMSE results for visualization
+```{r}
+cv_results_long <- cv_results |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(cols = everything(), names_to = "model", values_to = "rmse", names_prefix = "rmse_")
+```
+
+Violin plot of RMSE
+```{r}
+ggplot(cv_results_long, aes(x = model, y = rmse)) +
+  geom_violin() +
+  labs(title = "Cross-Validated RMSE for Birthweight Models", x = "Model", y = "RMSE") +
+  theme_minimal()
+
+```
+
+The model including head circumference, length, baby sex, and all interactions (including the three-way interaction) shows the lowest median RMSE and the least spread (small variability), suggesting it is the most accurate and consistent among the three models. The model using length at birth and gestational age as predictors has slightly higher RMSE compared to the interaction model. The spread is also relatively tight, indicating consistency in its predictions but less accuracy than the interaction model. Lastly, the proposed model shows the highest RMSE values with a wider spread compared to the other two models. This indicates it performs less well in predicting birthweight, with higher variability in its errors.
