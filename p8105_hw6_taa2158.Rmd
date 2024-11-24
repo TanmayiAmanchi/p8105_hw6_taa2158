@@ -11,6 +11,7 @@ library(purrr)
 library(ggplot2)
 library(tidyverse)
 library(modelr)
+library(janitor)
 set.seed(1000)
 ```
 
@@ -91,6 +92,84 @@ print(log_beta_plot)
 ```
 
 The bootstrap distribution of R² is slightly skewed to the right, with most values falling between 0.89 and 0.93 and a mode near 0.91, suggesting a strong and consistent model fit across different samples. The distribution of log(β₀β₁) is approximately symmetric and normally distributed, centered around 2.00, indicating stable relationships between the intercept and slope across re-samples.
+
+
+# Problem 2
+Import data and clean
+```{r}
+homicide_data = read.csv("data/homicide-data.csv")
+```
+
+```{r}
+homicide_data_clean <- homicide_data |>
+  clean_names() |>
+  mutate(
+    city_state = paste(city, state, sep = ", "),
+    victim_age = na_if(victim_age, "Unknown"),
+    victim_age = as.numeric(victim_age),
+    homicide_solved = ifelse(disposition == "Closed by arrest", 1, 0)
+  ) |>
+  filter(
+    !city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"),
+    victim_race %in% c("White", "Black")
+  )
+```
+
+Logistic Regression for Baltimore, MD
+```{r}
+baltimore_data <- homicide_data_clean |>
+  filter(city_state == "Baltimore, MD")
+
+baltimore_model <- glm(
+  homicide_solved ~ victim_age + victim_sex + victim_race,
+  data = baltimore_data,
+  family = binomial()
+)
+
+baltimore_results <- broom::tidy(baltimore_model, conf.int = TRUE, exponentiate = TRUE) |>
+  filter(term == "victim_sexMale") |>
+  select(term, OR = estimate, CI_lower = conf.low, CI_upper = conf.high)
+```
+
+Logistic Regression Across All Cities
+```{r}
+city_results <- homicide_data_clean |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(
+    model = map(data, ~ glm(homicide_solved ~ victim_age + victim_sex + victim_race, data = .x, family = binomial())),
+    results = map(model, ~ broom::tidy(.x, conf.int = TRUE, exponentiate = TRUE))
+  ) |>
+  unnest(results) |>
+  filter(term == "victim_sexMale") |>
+  select(city_state, OR = estimate, CI_lower = conf.low, CI_upper = conf.high)
+
+city_results
+```
+
+This table summarizes the odds ratio, and lower and upper confidence intervals for each city. 
+
+Plotting Adjusted Odds Ratios
+```{r}
+city_results |>
+  mutate(city_state = reorder(city_state, OR)) |>
+  ggplot(aes(x = OR, y = city_state)) +
+  geom_point(color = "purple") +
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), height = 0.3, color = "darkgray") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "pink") +
+  labs(
+    title = "Adjusted Odds Ratios for Solving Homicides (Male vs Female Victims)",
+    x = "Odds Ratio (Male vs Female)",
+    y = "City"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 8),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14)
+  )
+```
+
+Most cities have an odds ratio (OR) less than 1, suggesting that homicides involving female victims are more likely to be solved compared to male victims. Cities with an OR greater than 1 indicate that homicides involving male victims are more likely to be solved compared to female victims. The two cities with an OR = 1 are Richmond, CA and Atlanta, GA. This OR indicates no difference in the likelihood of solving homicides based on victim sex.
 
 
 
