@@ -1,0 +1,96 @@
+---
+title: "P8105 Homework 6"
+output: github_document
+date: "November 23, 2024"
+---
+
+```{r document setup, include = FALSE }
+library(dplyr)
+library(broom)
+library(purrr)
+library(ggplot2)
+library(tidyverse)
+library(modelr)
+set.seed(1000)
+```
+
+## Problem 1
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+Perform 5000 bootstrap samples and fit linear models
+```{r}
+bootstrap_results <- weather_df %>%
+  modelr::bootstrap(n = 5000, id = "bootstrap_id") %>%
+  mutate(
+    models = map(strap, ~ lm(tmax ~ tmin, data = .x)),
+    # Extract R-squared
+    r_squared = map_dbl(models, ~ glance(.x)$r.squared),
+    # Compute log(beta0 * beta1)
+    log_beta_product = map_dbl(models, ~ {
+      coefs <- tidy(.x)$estimate
+      log(coefs[1] * coefs[2])
+    })
+  )
+```
+
+Compute confidence intervals
+```{r}
+ci_results <- bootstrap_results %>%
+  summarise(
+    r_squared_lower = quantile(r_squared, 0.025),
+    r_squared_upper = quantile(r_squared, 0.975),
+    log_beta_lower = quantile(log_beta_product, 0.025),
+    log_beta_upper = quantile(log_beta_product, 0.975)
+  )
+```
+The 95% confidence interval for r squared is `r ci_results$r_squared_lower`, `r (ci_results$r_squared_upper)`.
+The 95% confidence interval for log(beta0*beta1) is `r ci_results$log_beta_lower`, `r ci_results$log_beta_upper`
+
+
+Plot distributions
+R-squared distribution
+```{r}
+r_squared_plot <- ggplot(bootstrap_results, aes(x = r_squared)) +
+  geom_histogram(binwidth = 0.005, fill = "blue", alpha = 0.7) +
+  labs(
+    title = "Bootstrap Distribution of R-squared",
+    x = expression(R^2),
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+Log(beta0 * beta1) distribution
+```{r}
+log_beta_plot <- ggplot(bootstrap_results, aes(x = log_beta_product)) +
+  geom_histogram(binwidth = 0.05, fill = "yellow", alpha = 0.7) +
+  labs(
+    title = "Bootstrap Distribution of log(beta0 * beta1)",
+    x = expression(log(beta[0] * beta[1])),
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+Display the plots
+```{r}
+print(r_squared_plot)
+print(log_beta_plot)
+```
+
+The bootstrap distribution of R² is slightly skewed to the right, with most values falling between 0.89 and 0.93 and a mode near 0.91, suggesting a strong and consistent model fit across different samples. The distribution of log(β₀β₁) is approximately symmetric and normally distributed, centered around 2.00, indicating stable relationships between the intercept and slope across re-samples.
+
+
+
